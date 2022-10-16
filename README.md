@@ -1,5 +1,7 @@
 On Policy Monte Carlo for Learning Racetrack
+
 Luxi Liu
+
 Oct 2022
 
 This project aims to implement and compare different algorithms for Monte Carlo
