@@ -12,7 +12,6 @@ class Status(Enum):
     FINISHED = 1
     FAILED = 2
     CONTINUE = 3
-    IGNORE = 4
 
 class Racetrack:
     def __init__(self, track, start, finish):
@@ -40,6 +39,10 @@ class Racetrack:
     def print(self):
         print("Racetrack:")
         print(self.track)
+        print("Start:")
+        print(self.start)
+        print("Finish:")
+        print(self.finish)
         print()
 
 class RaceCar:
@@ -48,7 +51,7 @@ class RaceCar:
         self.__velocity = [0, 0]
         self.__track = track
         self.avgRewards = {}          # state/action pair --> average reward
-        self.bestActionAtState = {}   # map: state --> best action
+        self.bestActionAtState = {}   # state --> best action, reward
 
     def reset(self):
         self.loc = random.choice(self.__track.start)
@@ -61,13 +64,21 @@ class RaceCar:
             return False
         return True
 
-    def change_velocity(self, policy, backTrack, stepNum, numEpisodes):
-        # while True: # keep generating delta if both x and y direction velocity 0 
+    def getBestActionAtState(self, state):
+        return self.bestActionAtState[state][0]
+
+    def getAvgReward(self, state_action):
+        return self.avgRewards[state_action][0]
+
+    def getAvgCount(self, state_action):
+        return self.avgRewards[state_action][1]
+
+    def change_velocity(self, policy, backTrack, stepNum):
+       
         delta = policy(self.loc, self)
-        # print("0 delta=", delta)
+
         self.__velocity[0] += delta[0]
         self.__velocity[1] += delta[1]
-        # print("0 vel=", self.__velocity[0], self.__velocity[1])
 
         if self.__velocity[0] < 0:
             self.__velocity[0] = 0
@@ -85,6 +96,7 @@ class RaceCar:
             self.__velocity[1] = 5
             delta[1] = 0
 
+        # keep generating random delta if both x and y direction velocity 0 
         while self.__velocity[0] == 0 and self.__velocity[1] == 0:
             vel = [0, 1]
             self.__velocity[0] =  random.choice(vel)
@@ -92,11 +104,10 @@ class RaceCar:
             delta[0] = self.__velocity[0]
             delta[1] = self.__velocity[1]
             # print("both velocities 0, regenerating delta")
-        # print("1 delta =", delta)
-        return self.update_pos(backTrack, delta, stepNum, numEpisodes)
+        return self.update_pos(backTrack, delta, stepNum)
 
     # note: this function assumes finish line is vertical (a column)
-    def update_pos(self, backTrack, delta, stepNum, numEpisodes):
+    def update_pos(self, backTrack, delta, stepNum):
         # print("delta in update_pos", delta)
         row = self.loc[0]
         col = self.loc[1]
@@ -117,9 +128,8 @@ class RaceCar:
             # print("in 0: row, col =", row, col)
             if not self.inBound(row, col):
                 # print("moving along velocity[0] exceeds bound, should restart")
-                self.calc_rewards(backTrack, stepNum, numEpisodes, OOB_PENALTY)
+                self.calc_rewards(backTrack, stepNum, OOB_PENALTY)
                 return Status.FAILED
-            
             # print("track value =", self.__track.track[row][col])
 
         # check location is part of the track if moving along velocity[1]
@@ -129,18 +139,18 @@ class RaceCar:
             col = self.loc[1]
             if not self.inBound(row, col):
                 # print("moving along velocity[1] exceeds bound, should restart")
-                self.calc_rewards(backTrack, stepNum, numEpisodes, OOB_PENALTY)
+                self.calc_rewards(backTrack, stepNum, OOB_PENALTY)
                 return Status.FAILED
 
             if self.loc in self.__track.finish:
                 # print("At finish line!")
-                self.calc_rewards(backTrack, stepNum, numEpisodes, GOAL_REWARD)
+                self.calc_rewards(backTrack, stepNum, GOAL_REWARD)
                 return Status.FINISHED
 
         # neither bounds exceeded nor succeeded, continue updates
         return Status.CONTINUE
 
-    def calc_rewards(self, backTrack, lastStep, episodeNum, lastStepReward):
+    def calc_rewards(self, backTrack, lastStep, lastStepReward):
         # sort dictionary backTrack by step, so we can correctly discount
         # backTrack = dict(sorted(backTrack.items(), key = lambda item:item[1], reverse=reverse))
 
@@ -159,27 +169,34 @@ class RaceCar:
 
             # update average reward for state-action pair
             if state_action not in self.avgRewards:
-                self.avgRewards[state_action] = backTrack[state_action]
+                self.avgRewards[state_action] = (backTrack[state_action], 1)
                 # print("0 self.avgRewards[state_action]=", self.avgRewards[state_action])
             else:
+                # print("updating avg for:", state_action)
+                prev_rew = self.getAvgReward(state_action)
+                prev_count = self.getAvgCount(state_action)
+                # print("prev_rew=", prev_rew)
+                # print("prev_count=", prev_count)
+                
                 self.avgRewards[state_action] = \
-                    (self.avgRewards[state_action] * episodeNum \
-                     + backTrack[state_action]) / (episodeNum + 1)
-                # print("1 self.avgRewards[state_action]=", self.avgRewards[state_action])
+                    ((prev_rew * prev_count + backTrack[state_action]) / (prev_count + 1),
+                     prev_count + 1)
+                # print("new rev=", self.avgRewards[state_action])
             
             # update best action at state and corresponding reward
             state = (state_action[0], state_action[1])
             action = (state_action[2], state_action[3])
             # if state in self.bestActionAtState:
                 # print("prev best=", self.bestActionAtState[state])
-            if state in self.bestActionAtState:
-                prev_best_action = self.bestActionAtState[state][0]
-                prev_best = (state_action[0], state_action[1], prev_best_action[0], prev_best_action[1])
-                # print("prev best=", prev_best_action)
-                if self.avgRewards[state_action] > self.avgRewards[prev_best]:
-                    self.bestActionAtState[state] = (action, self.avgRewards[state_action])
-            else:
+            if state not in self.bestActionAtState:
                 self.bestActionAtState[state] = (action, self.avgRewards[state_action])
+            else:
+                prev_best_action = self.getBestActionAtState(state)
+                prev_best_state_action = (state_action[0], state_action[1], \
+                                    prev_best_action[0], prev_best_action[1])
+                # print("prev best=", prev_best_action)
+                if self.getAvgReward(state_action) > self.getAvgReward(prev_best_state_action):
+                    self.bestActionAtState[state] = (action, self.getAvgReward(state_action))
             # print("curr best=", self.bestActionAtState[state])
             # print("end: in calc rewards\n")
 
@@ -187,8 +204,6 @@ class RaceCar:
         print("curr velocity =", self.__velocity)
         print("curr location =", self.loc)
         print()
-
-
 
 def getActionSet(state):
     return [-1, 0, 1]
@@ -199,18 +214,38 @@ def random_policy(state, raceCar):
     delta_y = random.choice(actions)
     return [delta_x, delta_y]
 
+def epsilon_greedy(state, raceCar):
+    rand_num = random.random()
+    if rand_num < EPSILON:
+        global EPSILON_COUNTER
+        EPSILON_COUNTER += 1
+        return random_policy(state, raceCar)
+    else:
+        global OPPOSITE_COUNTER
+        OPPOSITE_COUNTER += 1   
+        return greedy_policy(state, raceCar)
+
 def greedy_policy(state, raceCar):
-    print("greedy selects", raceCar.bestActionAtState[state])
-    return list(raceCar.bestActionAtState[state][0])
+    # print("current status")
+    # raceCar.print()
+    delta = []
+    if state in raceCar.bestActionAtState:
+        # print("greedy selects", raceCar.bestActionAtState[state])
+        delta = list(raceCar.getBestActionAtState(state))
+        best_rew = raceCar.getAvgCount((state[0], state[1], delta[0], delta[1]))
+        if np.isclose(best_rew, -100):
+            print("best so far is -100, taking random action")
+            delta = random_policy(state, raceCar)
+    else:
+        # print("state not encountered, cannot greedy select")
+        delta = random_policy(state, raceCar)
+    # print("delta =", delta)
+    return delta
 
-def sim(numEpisodes, racetrack, policy):
+def sim(numEpisodes, raceCar, policy):
     count = 0
-    raceCar = RaceCar(racetrack)
-    print("start set =", racetrack.start)
-    print("finish set =", racetrack.finish)
-
     for e in range(numEpisodes):
-        random.seed(e)
+        random.seed(e+1)
         # print("\n============= Episode", e, "=============")
         # print("start loc =", raceCar.loc)   # raceCar.print()
         res = Status.CONTINUE
@@ -218,7 +253,7 @@ def sim(numEpisodes, racetrack, policy):
 
         stepNum = 0
         while (res == Status.CONTINUE):
-            res = raceCar.change_velocity(policy, backTrack, stepNum, e)
+            res = raceCar.change_velocity(policy, backTrack, stepNum)
             stepNum += 1
 
         # print("backtrack:")
@@ -230,40 +265,105 @@ def sim(numEpisodes, racetrack, policy):
             # print("finished, stepNum =", stepNum)
             count += 1
         raceCar.reset()
-    
-    print("count = ", count)
+    # print("count = ", count)
 
-    print("\n\n--- running greedy ---")
-    print("best...")
-    for item in raceCar.bestActionAtState.items():
-        print(item)
-    print()
-    print("avg...")
-    for item in raceCar.avgRewards.items():
-        print(item)
-    print()
+def runGreedy(raceCar):
+    # print("\n\n--- running greedy ---")
+
+    # raceCar.bestActionAtState = dict(sorted(raceCar.bestActionAtState.items(),\
+    #     key = lambda item:item[0][0]))
+    # print("best...")
+    # for item in raceCar.bestActionAtState.items():
+    #     print(item)
+    # print()
+
+    # raceCar.avgRewards = dict(sorted(raceCar.avgRewards.items(),\
+    #     key = lambda item:(item[0][0], item[0][1])))
+    # print("avg...")
+    # for item in raceCar.avgRewards.items():
+    #     print(item)
+    # print()
     
     raceCar.reset()
-    print("start loc =", raceCar.loc)
+    # print("start loc =", raceCar.loc)
     res = Status.CONTINUE
     backTrack = {}
     stepNum = 0
     while (res == Status.CONTINUE):
-            res = raceCar.change_velocity(greedy_policy, backTrack, stepNum, numEpisodes)
+            res = raceCar.change_velocity(greedy_policy, backTrack, stepNum)
             stepNum += 1
-    print("backtrack:")
-    print(backTrack)
+    # print("backtrack:")
+    # print(backTrack)
 
-mini = np.array([[1, 1, 1, 0, 0],
-                 [0, 1, 1, 1, 0],
-                 [0, 0, 1, 1, 1]])
-miniTrack = Racetrack(mini, 0, 4)
+    if (res == Status.FINISHED):
+        # print("greedy success!")
+        global GREEDY_SUCCESS
+        GREEDY_SUCCESS += 1
+    else:
+        # print("greedy failed")
+        global GREEDY_FAILED
+        GREEDY_FAILED += 1
 
-# mini = np.array([[1, 1, 0],
-#                  [0, 1, 1]])
-# miniTrack = Racetrack(mini, 0, 2)
+EPSILON = 0.1
+EPSILON_COUNTER = 0
+OPPOSITE_COUNTER = 0
+GREEDY_SUCCESS = 0
+GREEDY_FAILED = 0
 
-miniTrack.print()
+def countGreedySuccess(track, lo, hi, policy):
+    global GREEDY_SUCCESS, GREEDY_FAILED
+    GREEDY_SUCCESS = 0
+    GREEDY_FAILED = 0
+    for i in range(lo, hi):
+        raceCar = RaceCar(track)
+        sim(i, raceCar, policy)
+        runGreedy(raceCar)
+    print("greedy success count", GREEDY_SUCCESS)
+    print("greedy failed count", GREEDY_FAILED)
 
-sim(1000, miniTrack, random_policy)
+# mini = np.array([[1, 1, 1, 0, 0],
+#                  [0, 1, 1, 1, 0],
+#                  [0, 0, 1, 1, 1]])
+# miniTrack = Racetrack(mini, 0, 4)
+# print("start set =", miniTrack.start)
+# print("finish set =", miniTrack.finish)
+# raceCar = RaceCar(miniTrack)
+# print()
+# print("counting epsilon greedy policy")
+# countGreedySuccess(miniTrack, 300, 400, epsilon_greedy)
+
+# print()
+# print("counting random policy")
+# countGreedySuccess(miniTrack, 300, 400, random_policy)
+
+# sim(1000, raceCar, random_policy)
+# for i in range(100, 500):
+#     raceCar = RaceCar(miniTrack)
+#     sim(i, raceCar, random_policy)
+#     # sim(i, raceCar, epsilon_greedy)
+#     runGreedy(raceCar)
+# print()
+# print("greedy success count", GREEDY_SUCCESS)
+# print("greedy failed count", GREEDY_FAILED)
+
+# print("random count =", EPSILON_COUNTER)
+# print("non-random counter =", OPPOSITE_COUNTER)
+
+track1 = np.loadtxt("track1", dtype="i")
+track1 = np.flipud(track1)  # last line should be the starting line (row 0)
+# print("track1:\n", track1)
+track1 = Racetrack(track1, 0, track1.shape[1] - 1)
+raceCar = RaceCar(track1)
+print("start set =", track1.start)
+print("finish set =", track1.finish)
+
+print()
+print("counting epsilon greedy policy")
+countGreedySuccess(track1, 1000, 1100, epsilon_greedy)
+print()
+print("counting random policy")
+countGreedySuccess(track1, 1000, 1100, random_policy)
+
+
+
 
