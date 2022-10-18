@@ -3,10 +3,13 @@ from turtle import back
 import numpy as np
 from enum import Enum
 import random
+import matplotlib.pyplot as plt
 
 GOAL_REWARD = 10
 OOB_PENALTY = -100 # out of bound penalty
 GAMMA = 0.9
+NOISE = 0
+NOT_NOISE = 0
 
 class Status(Enum):
     FINISHED = 1
@@ -73,9 +76,19 @@ class RaceCar:
     def getAvgCount(self, state_action):
         return self.avgRewards[state_action][1]
 
-    def change_velocity(self, policy, backTrack, stepNum):
-       
-        delta = policy(self.loc, self)
+    def formStateActionTuple(state, action):
+        return (state[0], state[1], action[0], action[1])
+
+    def change_velocity(self, policy, backTrack, stepNum, noise=False):
+        delta = None
+        if noise and random.random() < 0.2:
+            global NOISE
+            NOISE += 1
+            delta = [0, 0]
+        else:
+            global NOT_NOISE
+            NOT_NOISE += 1
+            delta = policy(self.loc, self)
 
         self.__velocity[0] += delta[0]
         self.__velocity[1] += delta[1]
@@ -151,9 +164,6 @@ class RaceCar:
         return Status.CONTINUE
 
     def calc_rewards(self, backTrack, lastStep, lastStepReward):
-        # sort dictionary backTrack by step, so we can correctly discount
-        # backTrack = dict(sorted(backTrack.items(), key = lambda item:item[1], reverse=reverse))
-
         # print("\n in calc rewards:")
         # print("lastStep =", lastStep)
         for state_action, step in backTrack.items():
@@ -242,7 +252,7 @@ def greedy_policy(state, raceCar):
     # print("delta =", delta)
     return delta
 
-def sim(numEpisodes, raceCar, policy):
+def sim(numEpisodes, raceCar, policy, noise=False):
     count = 0
     for e in range(numEpisodes):
         random.seed(e+1)
@@ -250,51 +260,29 @@ def sim(numEpisodes, raceCar, policy):
         # print("start loc =", raceCar.loc)   # raceCar.print()
         res = Status.CONTINUE
         backTrack = {}
-
         stepNum = 0
-        while (res == Status.CONTINUE):
-            res = raceCar.change_velocity(policy, backTrack, stepNum)
-            stepNum += 1
 
+        while (res == Status.CONTINUE):
+            res = raceCar.change_velocity(policy, backTrack, stepNum, noise)
+            stepNum += 1
         # print("backtrack:")
         # print(backTrack)
 
-        # if res == Status.FAILED:
-        #     print("failed, stepNum =", stepNum)
         if res == Status.FINISHED:
-            # print("finished, stepNum =", stepNum)
             count += 1
         raceCar.reset()
     # print("count = ", count)
 
 def runGreedy(raceCar):
-    # print("\n\n--- running greedy ---")
-
-    # raceCar.bestActionAtState = dict(sorted(raceCar.bestActionAtState.items(),\
-    #     key = lambda item:item[0][0]))
-    # print("best...")
-    # for item in raceCar.bestActionAtState.items():
-    #     print(item)
-    # print()
-
-    # raceCar.avgRewards = dict(sorted(raceCar.avgRewards.items(),\
-    #     key = lambda item:(item[0][0], item[0][1])))
-    # print("avg...")
-    # for item in raceCar.avgRewards.items():
-    #     print(item)
-    # print()
-    
     raceCar.reset()
     # print("start loc =", raceCar.loc)
     res = Status.CONTINUE
     backTrack = {}
     stepNum = 0
-    while (res == Status.CONTINUE):
+    while (res == Status.CONTINUE):                         # noise is off
             res = raceCar.change_velocity(greedy_policy, backTrack, stepNum)
             stepNum += 1
-    # print("backtrack:")
-    # print(backTrack)
-
+            
     if (res == Status.FINISHED):
         # print("greedy success!")
         global GREEDY_SUCCESS
@@ -303,23 +291,43 @@ def runGreedy(raceCar):
         # print("greedy failed")
         global GREEDY_FAILED
         GREEDY_FAILED += 1
+    
+    start = list(backTrack.items())[0]   # info for first step
+    print("start=", start)
+    return start
 
 EPSILON = 0.1
 EPSILON_COUNTER = 0
 OPPOSITE_COUNTER = 0
 GREEDY_SUCCESS = 0
 GREEDY_FAILED = 0
+greedy_success_list_random = []
+greedy_success_list_epsilon = []
 
-def countGreedySuccess(track, lo, hi, policy):
+def countGreedySuccess(track, lo, hi, policy, policy_name):
     global GREEDY_SUCCESS, GREEDY_FAILED
     GREEDY_SUCCESS = 0
     GREEDY_FAILED = 0
+    AvgFirstStepReward = 0
     for i in range(lo, hi):
         raceCar = RaceCar(track)
+        # sim(i, raceCar, policy, noise=True)
         sim(i, raceCar, policy)
-        runGreedy(raceCar)
+        rewStart = runGreedy(raceCar)[1]
+        AvgFirstStepReward = \
+            (AvgFirstStepReward * (i - lo) + rewStart)/(i - lo + 1)
+
     print("greedy success count", GREEDY_SUCCESS)
+    if policy_name == "random":
+        greedy_success_list_random.append(GREEDY_SUCCESS/(GREEDY_SUCCESS + GREEDY_FAILED))
+    elif policy_name == "epsilon":
+        greedy_success_list_epsilon.append(GREEDY_SUCCESS/(GREEDY_SUCCESS + GREEDY_FAILED))
+    else:
+        raise ValueError("incorrect policy name")
+     
     print("greedy failed count", GREEDY_FAILED)
+    print("AvgFirstStepReward", '{:.3f}'.format(AvgFirstStepReward))
+    return AvgFirstStepReward
 
 # mini = np.array([[1, 1, 1, 0, 0],
 #                  [0, 1, 1, 1, 0],
@@ -329,25 +337,12 @@ def countGreedySuccess(track, lo, hi, policy):
 # print("finish set =", miniTrack.finish)
 # raceCar = RaceCar(miniTrack)
 # print()
-# print("counting epsilon greedy policy")
-# countGreedySuccess(miniTrack, 300, 400, epsilon_greedy)
-
-# print()
 # print("counting random policy")
-# countGreedySuccess(miniTrack, 300, 400, random_policy)
-
-# sim(1000, raceCar, random_policy)
-# for i in range(100, 500):
-#     raceCar = RaceCar(miniTrack)
-#     sim(i, raceCar, random_policy)
-#     # sim(i, raceCar, epsilon_greedy)
-#     runGreedy(raceCar)
+# countGreedySuccess(miniTrack, 10, 30, random_policy)
 # print()
-# print("greedy success count", GREEDY_SUCCESS)
-# print("greedy failed count", GREEDY_FAILED)
+# print("counting epsilon greedy policy")
+# countGreedySuccess(miniTrack, 10, 30, epsilon_greedy)
 
-# print("random count =", EPSILON_COUNTER)
-# print("non-random counter =", OPPOSITE_COUNTER)
 
 track1 = np.loadtxt("track1", dtype="i")
 track1 = np.flipud(track1)  # last line should be the starting line (row 0)
@@ -356,14 +351,43 @@ track1 = Racetrack(track1, 0, track1.shape[1] - 1)
 raceCar = RaceCar(track1)
 print("start set =", track1.start)
 print("finish set =", track1.finish)
-
 print()
-print("counting epsilon greedy policy")
-countGreedySuccess(track1, 1000, 1100, epsilon_greedy)
-print()
-print("counting random policy")
-countGreedySuccess(track1, 1000, 1100, random_policy)
 
+startEpisode = 10
+startEpisode_list = []
+episodeNumRange = []
+AvgFirstStepRewardList_rand = []
+AvgFirstStepRewardList_epsilon = []
+for i in range(6):
+    print("startEpi=", startEpisode)
+    startEpisode_list.append(startEpisode)
+    episodeNumRange.append(startEpisode)
+    print("---counting random policy")
+    res = countGreedySuccess(track1, startEpisode, startEpisode + 20, random_policy, "random")
+    AvgFirstStepRewardList_rand.append(res)
+    print("---counting epsilon greedy policy")
+    res = countGreedySuccess(track1, startEpisode, startEpisode + 20, epsilon_greedy, "epsilon")
+    AvgFirstStepRewardList_epsilon.append(res)
+    startEpisode *= 5
+    print()
 
+print("episodeNumRange", episodeNumRange)
+print("AvgFirstStepRewardList_rand", AvgFirstStepRewardList_rand)
+print("AvgFirstStepRewardList_epsilon", AvgFirstStepRewardList_epsilon)
 
+plt.title("Average Return of Best State-Action Pair at Initial State")
+plt.plot(startEpisode_list, AvgFirstStepRewardList_rand, label = "Monte Carlo ES")
+plt.plot(startEpisode_list, AvgFirstStepRewardList_epsilon, label = "On-policy first-visit MC Control (Epsilon Greedy)")
+plt.xlabel('Number of Episodes')
+plt.ylabel('Average Return')
+plt.legend()
+plt.show()
+
+plt.title("Ratio of Greedy Run Succeeds at Finishing the Track")
+plt.plot(startEpisode_list, greedy_success_list_random, label = "Monte Carlo ES")
+plt.plot(startEpisode_list, greedy_success_list_epsilon, label = "On-policy first-visit MC Control (Epsilon Greedy)")
+plt.xlabel('Number of Episodes')
+plt.ylabel('Success Ratio')
+plt.legend()
+plt.show()
 
